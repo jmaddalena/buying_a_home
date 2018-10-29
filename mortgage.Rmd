@@ -1,0 +1,215 @@
+---
+title: "Mortgage Consideration"
+output: html_notebook
+---
+
+# Variables
+
+
+```{r}
+purchase_price <- 400000
+perc_down <- .03
+years <- 30
+int <- .05
+
+# estimated property value growth
+est_growth <- 0.00
+
+# at settlement
+settlement_perc <- .026
+ins_prem <- .0025
+
+# on top of mortgage
+tax_perc <- 0.0035001 # annual goes up with equity
+pmi_perc <- 0.016 # annual
+ins_perc <- .0025 # annual goes up with equity
+
+alt_mo_rent <- 1800
+rent_ins_perc <- .01
+
+```
+
+# Calculations
+
+```{r, fig.width = 8}
+principle <- purchase_price - perc_down*purchase_price
+month_pay <- ((int/12)*principle*(1+(int/12))^(years*12))/((1+(int/12))^(years*12) - 1)
+
+months <- 12*years
+
+# updatable variables
+curr_balance <- principle
+equity <- perc_down*purchase_price
+home_value <- purchase_price
+
+all_expenses <- NULL
+equity_sunk <- NULL
+
+for(month in 1:months){
+  
+  # Settlement, down
+  if(month == 1){
+    month1 <- data_frame(`Down Payment`= perc_down*purchase_price,
+               `Settlement Costs` = settlement_perc*purchase_price,
+               `Insurance Premium` = insurance_perc*purchase_price) %>%
+      gather(expense, cost)
+  } else {
+    month1 <- NULL
+  }
+  
+  # Must pay every month
+  
+  home_value <- home_value + purchase_price*est_growth/12
+  
+  mo_pay_breakdown <- calc_mo_pay(curr_balance, int = int, payment = month_pay)
+
+  curr_balance <- mo_pay_breakdown$new_balance
+  
+  principle_pay <- mo_pay_breakdown$old_balance - mo_pay_breakdown$new_balance
+  
+  must_pays <- data_frame(`Interest` = mo_pay_breakdown$int_pay,
+                          `Principle` = principle_pay,
+                          `Taxes` = tax_perc*home_value/12,
+                          `Insurance` = ins_perc*home_value/12) %>%
+      gather(expense, cost)
+  
+  equity <- equity + principle_pay + purchase_price*est_growth/12
+  
+  # PMI
+  
+  if(equity < .2*purchase_price){
+    pmi <- data_frame(`PMI` = pmi_perc*purchase_price/12) %>%
+      gather(expense, cost)
+  } else {
+    pmi <- NULL
+  }
+  
+  month_expenses <- bind_rows(month1, must_pays, pmi) %>%
+    mutate(month = month)
+  
+  all_expenses <- all_expenses %>%
+    bind_rows(month_expenses)
+  
+  equity_sunk_mo <- data_frame(Equity = equity, 
+                            Costs = sum(month_expenses$cost)) %>%
+    mutate(Month = month)
+  
+  equity_sunk <- equity_sunk %>%
+    bind_rows(equity_sunk_mo)
+  
+}
+
+ggplot(all_expenses %>% filter(month > 1), aes(x = month, y = cost, fill = expense)) + 
+  geom_bar(stat = "identity") +
+  scale_x_continuous(breaks = seq(0, 12*years, by = 12)) 
+
+```
+
+# Breakeven
+
+How much is being sunk into the property and how much equity is being gained? What's the difference.
+
+Factor H = Equity - sum(interest, insurance + premium, PMI, taxes, settlement)
+
+For renting:
+How much is being sunk into renting vs how much money made from investing? What's the difference?
+Factor R = Investments - sum(rent, insurance)
+
+Assumptions:
+* Renting cost increases at the same percentage as home values 
+* Renter puts the same amount of money towards renting/investing as homeowner does towards everything
+* To being, we will assume that a 2-bedroom house costs $300,000 to own and $2000/mo to rent.
+* We will assume the renter is making the same return on the stock market as the homeowner is on real estate. 
+* We will also assume rent increases at the same rate the home prices do, but only once each year. 
+
+```{r}
+equity_sunk_cum <- equity_sunk %>%
+  mutate(`Total Sunk` = cumsum(Costs),
+         factorX = Equity - `Total Sunk`)
+
+ggplot(equity_sunk_cum, aes(x = Month)) + 
+  geom_line(aes(y = `Total Sunk`, col = "Total Sunk")) + 
+  geom_line(aes(y = `Equity`, col = "Equity")) + 
+  labs(y = "$", col = "")
+```
+
+The renter, on the other hand, invests whatever they can each month
+
+```{r}
+
+# updatable 
+rent_all_months <- NULL
+rent_cost <- alt_mo_rent
+rent_ins <- rent_ins_perc*rent_cost
+
+total_invest <- 0
+
+for(month in 1:months){
+
+  home_costs <- equity_sunk_cum$Costs[month]
+
+  if(month %% 12 == 0){ # rent goes up
+    rent_cost <- rent_cost + rent_cost*est_growth
+    rent_ins <- rent_ins_perc*rent_cost
+  }
+  
+  differential <- home_costs - rent_cost - rent_ins
+  
+  if(differential < 0) differential <- 0
+  
+  total_invest <- total_invest + differential
+
+  mo_rent_breakdown <- data_frame(Month = month,
+                                  Rent = rent_cost + rent_ins,
+                                  `Total Investments` = total_invest)
+
+  rent_all_months <- rent_all_months %>%
+    bind_rows(mo_rent_breakdown)
+  
+  total_invest <- total_invest*(1 + est_growth/12)
+  
+}
+
+```
+
+```{r}
+rent_invest_sunk <- rent_all_months %>%
+  mutate(`Total Sunk` = cumsum(Rent),
+         factorX = `Total Investments` - `Total Sunk`)
+
+ggplot(rent_invest_sunk, aes(x = Month)) + 
+  geom_line(aes(y = `Total Sunk`, col = "Total Sunk")) + 
+  geom_line(aes(y = `Total Investments`, col = "Total Investments")) + 
+  labs(y = "$", col = "")
+```
+
+
+```{r}
+both <- bind_rows(rent_invest_sunk %>% mutate(strategy = "renting"),
+                  equity_sunk_cum %>% mutate(strategy = "buying"))
+                  
+ggplot(both , aes(x = Month, y = factorX, col = strategy)) + 
+geom_line()
+
+
+
+```
+
+What month do they cross?
+
+```{r}
+
+left_join(rent_invest_sunk %>% rename(factorR = factorX),
+                       equity_sunk_cum %>% rename(factorH = factorX),
+                       by = "Month") %>%
+  mutate(abs_diff = abs(factorR - factorH)) %>%
+  filter(abs_diff == min(abs_diff)) %>%
+  pull(Month)
+
+
+```
+
+
+
+
+
