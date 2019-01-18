@@ -13,7 +13,7 @@ years <- 30
 int <- .05
 
 # estimated property value growth
-est_growth <- 0.00
+est_growth <- 0.057
 
 # at settlement
 settlement_perc <- .026
@@ -51,7 +51,7 @@ for(month in 1:months){
   if(month == 1){
     month1 <- data_frame(`Down Payment`= perc_down*purchase_price,
                `Settlement Costs` = settlement_perc*purchase_price,
-               `Insurance Premium` = insurance_perc*purchase_price) %>%
+               `Insurance Premium` = ins_perc*purchase_price) %>%
       gather(expense, cost)
   } else {
     month1 <- NULL
@@ -105,6 +105,24 @@ ggplot(all_expenses %>% filter(month > 1), aes(x = month, y = cost, fill = expen
 
 ```
 
+Table of total expenses:
+
+```{r}
+expenses_summ <- all_expenses %>%
+  mutate(Expense = case_when(expense %in% c("Down Payment", "Principle") ~ "Principle",
+                                   expense %in% c("Insurance Premium", "Insurance") ~ "Insurance",
+                                   TRUE ~ expense)) %>%
+  group_by(Expense) %>%
+  summarize(`Total Cost` = scales::dollar_format()(sum(cost))) %>%
+  arrange(desc(`Total Cost`))
+
+total_cost <- sum(expenses_summ$total_cost)
+
+equity_eom <- equity
+```
+
+
+
 # Breakeven
 
 How much is being sunk into the property and how much equity is being gained? What's the difference.
@@ -131,6 +149,17 @@ ggplot(equity_sunk_cum, aes(x = Month)) +
   geom_line(aes(y = `Total Sunk`, col = "Total Sunk")) + 
   geom_line(aes(y = `Equity`, col = "Equity")) + 
   labs(y = "$", col = "")
+
+equity_sunk_cum <- equity_sunk %>%
+      mutate(`Total Sunk` = cumsum(Costs),
+             factorX = Equity - `Total Sunk`) %>%
+      mutate(Year = Month/12)
+    
+    ggplot(equity_sunk_cum, aes(x = Year)) + 
+      geom_line(aes(y = `Total Sunk`, col = "Total Sunk")) + 
+      geom_line(aes(y = `Equity`, col = "Equity")) + 
+      labs(y = "$", col = "") +
+      scale_x_continuous(breaks = seq(0, 30, by = 2))
 ```
 
 The renter, on the other hand, invests whatever they can each month
@@ -210,6 +239,16 @@ left_join(rent_invest_sunk %>% rename(factorR = factorX),
 ```
 
 
+```{r}
+all_expenses %>% 
+      mutate(Expense = case_when(expense %in% c("Interest", "Principle") ~ "Mortgage",
+                                  TRUE ~ expense)) %>%
+      filter(Expense %in% c("Mortgage", "Taxes", "Insurance"),
+             month ==2) %>%
+      group_by(Expense) %>% 
+      summarize(Payment = sprintf("$%0.2f", sum(cost))) %>%
+      select(-month)
+```
 
 
 

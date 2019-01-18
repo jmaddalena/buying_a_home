@@ -1,6 +1,10 @@
 library(shiny)
 library(tidyverse)
+library(lubridate)
+library(scales)
 source("source.R")
+
+options(scipen = 9999)
 
 ui <- fluidPage(
   
@@ -18,8 +22,8 @@ ui <- fluidPage(
                   value = 3, step = .1),
       radioButtons("years", label = h5("Loan Term"), selected = 30,
                    choices = list("15 year" = 15, "20 year" = 20, "30 year" = 30)),
-      sliderInput("int", label = h5("Interest Rate"), min = 0, max = 10,
-                   value = 5.375, step = .005),
+      numericInput("int", label = h5("Interest Rate"), min = 0, max = 10,
+                   value = 4.75, step = .005),
       
       br(),
       h4("Closing Costs"),
@@ -45,7 +49,12 @@ ui <- fluidPage(
     ),
     
     mainPanel(
-      plotOutput(outputId = "pay_plot")  
+      plotOutput(outputId = "pay_plot") ,
+      textOutput(outputId = "total_cost"),
+      br(),
+      tableOutput(outputId = "info_table"),
+      tableOutput(outputId = "mortgage_payment"),
+      plotOutput(outputId = "equity_sunk_plot")
     )
   )
 )
@@ -140,11 +149,59 @@ server <- function(input, output){
       scale_x_continuous(breaks = seq(0, 12*as.numeric(input$years), by = 12)) 
   })
   
-  output$info_table <- renderTable({
+  output$total_cost <- renderText({
+    total_cost <- sum(data_list()$all_expenses$cost)
+    equity_exp <- last(data_list()$equity_sunk$Equity)
     
+    print(as.numeric(input$years))
     
+    text <- sprintf("The total cost of owning this home over %s years is %s, 
+            with an expected total equity of %s in the year %s ", 
+            input$years, dollar_format()(total_cost),
+            dollar_format()(equity_exp), 
+            year(Sys.time() + dyears(as.numeric(input$years))))
+    
+    text
   })
   
+  output$info_table <- renderTable({
+    
+    data_list()$all_expenses  %>%
+      mutate(Expense = case_when(expense %in% c("Down Payment", "Principle") ~ "Principle",
+                                 expense %in% c("Insurance Premium", "Insurance") ~ "Insurance",
+                                 TRUE ~ expense)) %>%
+      group_by(Expense) %>%
+      summarize(`Total Cost` = sum(cost)) %>%
+      arrange(desc(`Total Cost`)) %>%
+      mutate(`Total Cost` = scales::dollar_format()(`Total Cost`))
+  
+  })
+  
+  output$mortgage_payment <- renderTable({
+    data_list()$all_expenses %>% 
+      mutate(Expense = case_when(expense %in% c("Interest", "Principle") ~ "Mortgage",
+                                  TRUE ~ expense)) %>%
+      filter(Expense %in% c("Mortgage", "Taxes", "Insurance"),
+             month ==2) %>%
+      group_by(Expense) %>% 
+      summarize(`Monthly Payment` = scales::dollar_format()(sum(cost))) %>%
+      select(-month)
+  })
+  
+  output$equity_sunk_plot <- renderPlot({
+    equity_sunk_cum <- data_list()$equity_sunk %>%
+      mutate(`Total Sunk` = cumsum(Costs)) %>%
+      mutate(Year = Month/12)
+    
+    print(head(equity_sunk_cum))
+    
+    ggplot(equity_sunk_cum, aes(x = Year)) + 
+      geom_line(aes(y = `Total Sunk`, col = "Total Sunk")) + 
+      geom_line(aes(y = `Equity`, col = "Equity")) + 
+      labs(col = "", y = "") +
+      scale_x_continuous(breaks = seq(0, as.numeric(input$years), by = 1)) +
+      scale_y_continuous(labels = scales::dollar)
+  })
   
 }
 
